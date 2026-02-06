@@ -16,10 +16,19 @@ export const Velocity = defineComponent("Velocity", () => ({
 
 export type VelocityData = ReturnType<typeof Velocity.default>;
 
+// tldraw's color palette
+export type TldrawColor =
+  | "black" | "grey" | "light-violet" | "violet" | "blue" | "light-blue"
+  | "yellow" | "orange" | "green" | "light-green" | "light-red" | "red" | "white";
+
+export const TLDRAW_COLORS: TldrawColor[] = [
+  "blue", "red", "green", "orange", "violet", "light-blue", "light-green", "light-red", "yellow", "black", "grey"
+];
+
 // Visual appearance
 export const Appearance = defineComponent("Appearance", () => ({
-  color: "#3b82f6",
-  radius: 20,
+  color: "blue" as TldrawColor,
+  size: 40,
 }));
 
 export type AppearanceData = ReturnType<typeof Appearance.default>;

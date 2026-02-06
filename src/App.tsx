@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Tldraw, Editor } from "tldraw";
 import "tldraw/tldraw.css";
 
@@ -6,48 +6,61 @@ import type { World } from "./engine";
 import { createWorld } from "./engine";
 import { Position, Velocity, TldrawShape } from "./components";
 import { PhysicsSystem, BounceSystem } from "./systems/physics";
+import { PhysicsConfig } from "./engine/physics-config";
 import {
   TldrawBridgeSystem,
   TldrawEditor,
   createShapesForEntities,
+  syncAppearanceToShapes,
 } from "./systems/tldraw-bridge";
+import { SaveLoadPanel, InputPanel, EntityInspector, EntityDetailPanel, PhysicsPanel } from "./ui";
+import { ThemeProvider, useTheme } from "./ui/theme";
 
 function App() {
-  const worldRef = useRef<World | null>(null);
+  const [world, setWorld] = useState<World | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [entityCount, setEntityCount] = useState(0);
   const [running, setRunning] = useState(true);
 
   // Initialize world once
   useEffect(() => {
-    const world = createWorld();
+    const newWorld = createWorld();
 
     // Register systems in order
-    world.addSystem(PhysicsSystem);
-    world.addSystem(BounceSystem);
-    world.addSystem(TldrawBridgeSystem);
+    newWorld.addSystem(PhysicsSystem);
+    newWorld.addSystem(BounceSystem);
+    newWorld.addSystem(TldrawBridgeSystem);
 
-    worldRef.current = world;
+    setWorld(newWorld);
   }, []);
 
   // Connect editor to world
   useEffect(() => {
-    if (!editor || !worldRef.current) return;
+    if (!editor || !world) return;
 
-    const world = worldRef.current;
     world.setResource(TldrawEditor, editor);
 
     // Create initial entities after editor is ready
     createInitialEntities(world);
-    setEntityCount(world.query(Position).length);
 
-    // Create shapes for initial entities
-    setTimeout(() => createShapesForEntities(world), 100);
-  }, [editor]);
+    // Create shapes for initial entities and zoom to fit bounds
+    setTimeout(() => {
+      createShapesForEntities(world);
+      // Zoom to fit the physics bounds with padding
+      const config = world.getResource(PhysicsConfig);
+      const padding = 100;
+      const bounds = {
+        x: config.bounds.minX - padding,
+        y: config.bounds.minY - padding,
+        w: config.bounds.maxX - config.bounds.minX + padding * 2,
+        h: config.bounds.maxY - config.bounds.minY + padding * 2,
+      };
+      editor.zoomToBounds(bounds);
+    }, 100);
+  }, [editor, world]);
 
   // Game loop
   useEffect(() => {
-    if (!worldRef.current || !running) return;
+    if (!world || !running) return;
 
     let lastTime = performance.now();
     let frameId: number;
@@ -57,8 +70,9 @@ function App() {
       const dt = (now - lastTime) / 1000; // Convert to seconds
       lastTime = now;
 
-      worldRef.current!.tick(dt);
-      createShapesForEntities(worldRef.current!);
+      world.tick(dt);
+      createShapesForEntities(world);
+      syncAppearanceToShapes(world);
 
       frameId = requestAnimationFrame(loop);
     };
@@ -66,12 +80,11 @@ function App() {
     frameId = requestAnimationFrame(loop);
 
     return () => cancelAnimationFrame(frameId);
-  }, [running]);
+  }, [running, world]);
 
   const spawnEntity = () => {
-    if (!worldRef.current) return;
+    if (!world) return;
 
-    const world = worldRef.current;
     const entity = world.spawn();
 
     world.attach(entity, Position, {
@@ -85,65 +98,137 @@ function App() {
     });
 
     world.attach(entity, TldrawShape);
-
-    setEntityCount(world.query(Position).length);
   };
 
   return (
     <div style={{ width: "100vw", height: "100vh", display: "flex" }}>
-      {/* Control panel */}
-      <div
-        style={{
-          width: 240,
-          padding: 16,
-          borderRight: "1px solid #e5e5e5",
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-          background: "#fafafa",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 18 }}>Engine Demo</h2>
-
-        <div style={{ fontSize: 14, color: "#666" }}>
-          Entities: {entityCount}
-        </div>
-
-        <button onClick={spawnEntity} style={buttonStyle}>
-          Spawn Entity
-        </button>
-
-        <button onClick={() => setRunning(!running)} style={buttonStyle}>
-          {running ? "Pause" : "Resume"}
-        </button>
-
-        <div
-          style={{ marginTop: "auto", fontSize: 12, color: "#999", lineHeight: 1.5 }}
-        >
-          <strong>Primitives:</strong>
-          <br />
-          • Entity (ID only)
-          <br />
-          • Components (Position, Velocity)
-          <br />
-          • Systems (Physics, Bounce, Sync)
-          <br />
-          <br />
-          Shapes are tldraw geo shapes synced to entity Position.
-        </div>
-      </div>
+      <ThemeProvider editor={editor}>
+        <Sidebar
+          world={world}
+          editor={editor}
+          running={running}
+          onSpawn={spawnEntity}
+          onToggleRunning={() => setRunning(!running)}
+        />
+      </ThemeProvider>
 
       {/* Canvas */}
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, position: "relative" }}>
         <Tldraw
           onMount={setEditor}
           components={{
-            // Hide some UI for cleaner demo
             DebugPanel: null,
             DebugMenu: null,
           }}
         />
+        {/* Floating detail panel */}
+        <ThemeProvider editor={editor}>
+          {world && <EntityDetailPanel world={world} editor={editor} />}
+        </ThemeProvider>
       </div>
+    </div>
+  );
+}
+
+interface SidebarProps {
+  world: World | null;
+  editor: Editor | null;
+  running: boolean;
+  onSpawn: () => void;
+  onToggleRunning: () => void;
+}
+
+function Sidebar({ world, editor, running, onSpawn, onToggleRunning }: SidebarProps) {
+  const { theme, isDark } = useTheme();
+
+  const compactButtonStyle: React.CSSProperties = {
+    flex: 1,
+    padding: "6px 10px",
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    border: "none",
+    borderRadius: 6,
+    background: theme.panelContrast,
+    color: theme.text0,
+    cursor: "pointer",
+    transition: "background 0.1s",
+  };
+
+  return (
+    <div
+      className={isDark ? "tl-theme__dark" : ""}
+      style={{
+        width: 220,
+        borderRight: `1px solid ${theme.divider}`,
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+        display: "flex",
+        flexDirection: "column",
+        background: theme.panel,
+        overflow: "hidden",
+      }}
+    >
+      {/* Compact controls */}
+      <div style={{ padding: 12, borderBottom: `1px solid ${theme.divider}` }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={onSpawn}
+            style={compactButtonStyle}
+            onMouseOver={(e) => (e.currentTarget.style.background = theme.hoverBg)}
+            onMouseOut={(e) => (e.currentTarget.style.background = theme.panelContrast)}
+          >
+            Spawn
+          </button>
+          <button
+            onClick={onToggleRunning}
+            style={{
+              ...compactButtonStyle,
+              background: running ? theme.panelContrast : theme.selected,
+              color: running ? theme.text0 : theme.selectedContrast,
+            }}
+            onMouseOver={(e) => {
+              if (running) e.currentTarget.style.background = theme.hoverBg;
+            }}
+            onMouseOut={(e) => {
+              if (running) e.currentTarget.style.background = theme.panelContrast;
+            }}
+          >
+            {running ? "Pause" : "Play"}
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable panels */}
+      <div
+        className="hide-scrollbar"
+        style={{
+          flex: 1,
+          overflowY: "auto",
+        }}
+      >
+        {world && (
+          <>
+            <div style={{ padding: 16 }}>
+              <PhysicsPanel world={world} editor={editor} />
+            </div>
+            <div style={{ height: 1, background: theme.divider }} />
+            <div style={{ padding: 16 }}>
+              <EntityInspector world={world} editor={editor} />
+            </div>
+            <div style={{ height: 1, background: theme.divider }} />
+            <div style={{ padding: 16 }}>
+              <InputPanel world={world} />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Footer with Save/Load */}
+      {world && (
+        <div style={{ padding: 12, borderTop: `1px solid ${theme.divider}` }}>
+          <SaveLoadPanel world={world} />
+        </div>
+      )}
     </div>
   );
 }
@@ -165,14 +250,5 @@ function createInitialEntities(world: World) {
     world.attach(entity, TldrawShape);
   }
 }
-
-const buttonStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  fontSize: 14,
-  border: "1px solid #ddd",
-  borderRadius: 6,
-  background: "white",
-  cursor: "pointer",
-};
 
 export default App;
