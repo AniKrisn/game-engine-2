@@ -7,10 +7,10 @@ import { createWorld } from "./engine";
 import { Position, Velocity, TldrawShape } from "./components";
 import { PhysicsSystem, BounceSystem } from "./systems/physics";
 import {
-  TldrawSyncSystem,
+  TldrawBridgeSystem,
   TldrawEditor,
   createShapesForEntities,
-} from "./systems/tldraw-sync";
+} from "./systems/tldraw-bridge";
 
 function App() {
   const worldRef = useRef<World | null>(null);
@@ -25,7 +25,7 @@ function App() {
     // Register systems in order
     world.addSystem(PhysicsSystem);
     world.addSystem(BounceSystem);
-    world.addSystem(TldrawSyncSystem);
+    world.addSystem(TldrawBridgeSystem);
 
     worldRef.current = world;
   }, []);

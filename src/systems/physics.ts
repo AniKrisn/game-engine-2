@@ -1,5 +1,6 @@
 import type { System } from "../engine/types";
 import { Position, Velocity } from "../components";
+import { isEntityDragging } from "./tldraw-bridge";
 
 // Physics system: applies velocity to position
 export const PhysicsSystem: System = {
@@ -10,6 +11,9 @@ export const PhysicsSystem: System = {
     const entities = world.query(Position, Velocity);
 
     for (const entity of entities) {
+      // Skip entities being dragged by user
+      if (isEntityDragging(entity)) continue;
+
       const pos = world.get(entity, Position)!;
       const vel = world.get(entity, Velocity)!;
 
