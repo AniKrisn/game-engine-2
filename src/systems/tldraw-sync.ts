@@ -1,8 +1,8 @@
-import type { Editor, TLShapeId } from "tldraw";
+import type { Editor, TLShapeId, HistoryEntry, TLRecord } from "tldraw";
 import { createShapeId } from "tldraw";
 import type { System, World, EntityId } from "../engine/types";
 import { defineResource } from "../engine/types";
-import { Position, TldrawShape } from "../components";
+import { Position, Velocity, TldrawShape } from "../components";
 
 // tldraw's color palette
 type TldrawColor =
@@ -22,6 +22,9 @@ const pendingShapes = new Set<EntityId>();
 // Simple counter for color assignment
 let colorIndex = 0;
 
+// Flag to prevent feedback loop: true when we're updating shapes programmatically
+let isSyncingToTldraw = false;
+
 // System that syncs entity positions to tldraw shapes
 export const TldrawSyncSystem: System = {
   name: "TldrawSync",
@@ -32,6 +35,9 @@ export const TldrawSyncSystem: System = {
     if (!editor) return;
 
     const entities = world.query(Position, TldrawShape);
+
+    // Set flag to prevent listener from processing our updates
+    isSyncingToTldraw = true;
 
     for (const entity of entities) {
       const pos = world.get(entity, Position)!;
@@ -55,6 +61,8 @@ export const TldrawSyncSystem: System = {
         });
       }
     }
+
+    isSyncingToTldraw = false;
   },
 };
 
@@ -95,20 +103,82 @@ export function createShapesForEntities(world: World) {
   }
 }
 
+// Track which entities are currently being dragged (to pause physics)
+const draggingEntities = new Set<EntityId>();
+
 // Sync tldraw shape movements back to entity positions (for user dragging)
 export function syncShapeToEntity(
   world: World,
   shapeId: TLShapeId,
   x: number,
-  y: number
+  y: number,
+  pauseVelocity: boolean = true
 ) {
   const entities = world.query(Position, TldrawShape);
 
   for (const entity of entities) {
     const shapeLink = world.get(entity, TldrawShape)!;
     if (shapeLink.shapeId === (shapeId as string)) {
+      const currentPos = world.get(entity, Position)!;
+
+      // Skip if position already matches (prevents feedback loop)
+      if (Math.abs(currentPos.x - x) < 0.01 && Math.abs(currentPos.y - y) < 0.01) {
+        return;
+      }
+
       world.set(entity, Position, { x, y });
+
+      // Optionally pause velocity so physics doesn't fight the drag
+      if (pauseVelocity && world.has(entity, Velocity)) {
+        world.set(entity, Velocity, { x: 0, y: 0 });
+        draggingEntities.add(entity);
+      }
       break;
     }
   }
+}
+
+// Check if an entity is currently being dragged
+export function isEntityDragging(entity: EntityId): boolean {
+  return draggingEntities.has(entity);
+}
+
+// Clear dragging state for an entity
+export function clearDraggingState(entity: EntityId): void {
+  draggingEntities.delete(entity);
+}
+
+// Set up a listener for tldraw shape changes to enable bidirectional sync
+export function setupShapeChangeListener(
+  editor: Editor,
+  world: World
+): () => void {
+  // Listen to store changes for shape updates
+  // Only process when user is actively pointing (dragging)
+  const unsubscribe = editor.store.listen(
+    (entry: HistoryEntry<TLRecord>) => {
+      // Skip if we're the ones updating shapes (prevent feedback loop)
+      if (isSyncingToTldraw) return;
+
+      // Only process if user is actively dragging (pointer is down)
+      const isPointerDown = editor.inputs.isPointing;
+      if (!isPointerDown) return;
+
+      const { changes } = entry;
+
+      // Process updated shapes (when user drags them)
+      if (changes.updated) {
+        for (const [_from, to] of Object.values(changes.updated)) {
+          // Only handle shape records with x/y properties
+          if (to.typeName === "shape" && "x" in to && "y" in to) {
+            const shape = to as { id: TLShapeId; x: number; y: number };
+            syncShapeToEntity(world, shape.id, shape.x, shape.y, true);
+          }
+        }
+      }
+    },
+    { source: "user", scope: "document" }
+  );
+
+  return unsubscribe;
 }
